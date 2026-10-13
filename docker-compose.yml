@@ -1,0 +1,58 @@
+# Local + CI infrastructure. Not used in staging/production (Neon + managed/VPS Redis).
+services:
+  postgres:
+    # Keep the major version identical to the Neon project (docs/12-deployment.md).
+    image: postgres:${POSTGRES_VERSION:-17}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-boxxed}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-boxxed_local_only}
+      POSTGRES_DB: ${POSTGRES_DB:-boxxed}
+    ports:
+      - '${POSTGRES_PORT:-5433}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-boxxed} -d ${POSTGRES_DB:-boxxed}']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    # noeviction: Redis holds refresh-token families and OTP challenges (docs/12-deployment.md).
+    command:
+      [
+        'redis-server',
+        '--maxmemory-policy',
+        'noeviction',
+        '--appendonly',
+        'yes',
+        '--appendfsync',
+        'everysec',
+      ]
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Local mail catcher for email OTPs: SMTP on 1025, web UI on http://localhost:8025.
+  # Codes are read here, never from the logs. Staging/prod use a real SMTP relay.
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - '${MAILPIT_SMTP_PORT:-1025}:1025'
+      - '${MAILPIT_UI_PORT:-8025}:8025'
+    healthcheck:
+      test: ['CMD', '/mailpit', 'readyz']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres-data:
+  redis-data:

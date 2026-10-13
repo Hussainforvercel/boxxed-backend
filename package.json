@@ -1,0 +1,31 @@
+{
+  "name": "boxxed-backend",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @boxxed/api start:dev",
+    "start": "pnpm --filter @boxxed/api start",
+    "start:dev": "pnpm --filter @boxxed/api start:dev",
+    "prebuild": "pnpm --filter @boxxed/shared build",
+    "build": "pnpm --filter @boxxed/shared build && pnpm --filter @boxxed/api build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm --filter @boxxed/api test",
+    "test:integration": "pnpm --filter @boxxed/api test:integration",
+    "prisma": "pnpm --filter @boxxed/api exec prisma",
+    "db:generate": "pnpm --filter @boxxed/api db:generate",
+    "db:migrate:dev": "pnpm --filter @boxxed/api db:migrate:dev",
+    "db:migrate:deploy": "pnpm --filter @boxxed/api db:migrate:deploy",
+    "db:seed": "pnpm --filter @boxxed/api db:seed",
+    "codegen": "pnpm --filter @boxxed/api schema:emit && pnpm --filter @boxxed/shared codegen",
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.8",
+    "typescript": "~5.9.3"
+  }
+}

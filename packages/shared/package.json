@@ -1,0 +1,27 @@
+{
+  "name": "@boxxed/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Generated GraphQL schema/types and shared constants only. No business logic.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "react-native": "./src/index.ts",
+  "exports": {
+    ".": {
+      "react-native": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "codegen": "graphql-codegen --config codegen.ts"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^7.4.2",
+    "@graphql-codegen/typescript": "^6.1.0",
+    "graphql": "^16.14.2",
+    "typescript": "~5.9.3"
+  }
+}

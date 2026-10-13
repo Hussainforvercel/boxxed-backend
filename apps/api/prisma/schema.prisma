@@ -1,0 +1,511 @@
+// Models arrive with the phase that needs them; PROVISIONAL ones wait for the design gate
+// (docs/08-data-model.md). Connection URLs live in prisma.config.ts (Prisma 7).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────── Designed (Phase 1, docs/08) ─────────────
+
+enum UserRole {
+  CUSTOMER
+  VENDOR_STAFF // PROVISIONAL
+  ADMIN // PROVISIONAL
+}
+
+enum OnboardingStep {
+  PROFILE // needs fullName (a verified phone is NOT required — DEC-3; it is a pre-reservation rule)
+  CONSENT // needs the current TERMS + PRIVACY consents
+  COMPLETE
+}
+
+enum AuthProvider {
+  EMAIL_OTP
+  PHONE_OTP
+  GOOGLE
+}
+
+enum ConsentKind {
+  TERMS
+  PRIVACY
+  WHATSAPP_MARKETING
+}
+
+model User {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  email           String?        @unique @db.Citext
+  emailVerifiedAt DateTime?      @db.Timestamptz(3)
+  phoneE164       String?        @unique @db.VarChar(16)
+  phoneVerifiedAt DateTime?      @db.Timestamptz(3)
+  fullName        String?        @db.VarChar(80)
+  role            UserRole       @default(CUSTOMER)
+  onboardingStep  OnboardingStep @default(PROFILE)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+  deletedAt       DateTime?      @db.Timestamptz(3)
+
+  identities   AuthIdentity[]
+  consents     ConsentRecord[]
+  reservations Reservation[]
+}
+
+model AuthIdentity {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  userId     String       @db.Uuid
+  provider   AuthProvider
+  subject    String // Google `sub`, normalized email, or E.164 phone
+  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+  lastUsedAt DateTime     @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+}
+
+// Append-only: current state = latest row per (userId, kind).
+model ConsentRecord {
+  id        String      @id @default(uuid(7)) @db.Uuid
+  userId    String      @db.Uuid
+  kind      ConsentKind
+  version   String      @db.VarChar(32) // legal doc version, e.g. "2026-09-01"
+  granted   Boolean
+  source    String      @db.VarChar(32) // "onboarding" | "settings"
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind, createdAt(sort: Desc)])
+}
+
+// ───────────── Super Admin & Platform Operations ─────────────
+
+enum AdminRole {
+  SUPER_ADMIN
+  OPERATIONS
+  FINANCE_VIEWER
+  COMPLIANCE_AUDITOR
+}
+
+enum PartnerStatus {
+  ACTIVE
+  ONBOARDING
+  INACTIVE_SEASONAL
+  SUSPENDED
+}
+
+enum SubscriptionTier {
+  TRIAL
+  ACTIVE
+  PAUSED
+  ENTERPRISE
+}
+
+enum BillingCadence {
+  FOUR_WEEKS // 28-day cycle
+  CALENDAR_MONTH
+}
+
+enum BranchStatus {
+  ACTIVE
+  BUSY_THROTTLED
+  INACTIVE
+  CLOSED_EMERGENCY
+}
+
+enum StaffRole {
+  RESTAURANT_ADMIN
+  BRANCH_MANAGER
+  KITCHEN_STAFF
+  DISPATCH_OPERATOR
+}
+
+enum StaffStatus {
+  INVITATION_PENDING
+  ACTIVE
+  REVOKED
+}
+
+enum DropStatus {
+  DRAFT_REVIEW
+  ACTIVE_DROP
+  SOLD_OUT
+  UNSOLD_EXPIRED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  IN_KITCHEN
+  READY_FOR_PICKUP
+  COMPLETED
+  NO_SHOW
+  CANCELLED
+  REFUNDED
+}
+
+enum ComplaintStatus {
+  PENDING_REVIEW
+  INVESTIGATING
+  RESOLVED_REFUNDED
+  RESOLVED_REJECTED
+}
+
+enum AuditActionType {
+  PARTNER_ONBOARDED
+  PARTNER_STATUS_CHANGED
+  BRANCH_CREATED
+  BRANCH_THROTTLED
+  BRANCH_EMERGENCY_SHUTDOWN
+  DROP_CREATED
+  DROP_PUBLISHED
+  DROP_CANCELLED
+  COMMISSION_RATE_OVERRIDDEN
+  REFUND_DISPATCHED
+  STAFF_INVITED
+  STAFF_REVOKED
+  MASTER_MENU_UPDATED
+  BRANCH_MENU_OVERRIDDEN
+}
+
+model AdminUser {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  email        String     @unique @db.Citext
+  passwordHash String     @db.VarChar(255)
+  fullName     String     @db.VarChar(100)
+  role         AdminRole  @default(OPERATIONS)
+  title        String?    @db.VarChar(60)
+  hqLocation   String     @default("Karachi HQ") @db.VarChar(60)
+  isActive     Boolean    @default(true)
+  lastLoginAt  DateTime?  @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(3)
+
+  auditLogs AuditLog[]
+}
+
+model Restaurant {
+  id                        String           @id @default(uuid(7)) @db.Uuid
+  slug                      String           @unique @db.VarChar(120)
+  name                      String           @db.VarChar(120)
+  avatarLetter              String           @db.Char(2)
+  avatarBg                  String?          @db.VarChar(60)
+  partnerNumber             String           @unique @db.VarChar(16) // e.g. "#100"
+  cuisine                   String           @db.VarChar(80)
+  description               String?          @db.VarChar(500)
+  status                    PartnerStatus    @default(ONBOARDING)
+  subscription              SubscriptionTier @default(TRIAL)
+
+  // Primary POC Communications
+  contactName               String           @db.VarChar(80)
+  contactEmail              String           @db.Citext
+  contactPhone              String           @db.VarChar(20)
+  altPhone                  String?          @db.VarChar(20)
+
+  // Commercial & Financial Terms
+  onboardingDate            DateTime         @default(now()) @db.Timestamptz(3)
+  onboardingFeeMinor        Int              @default(2500000) // PKR 25,000 in minor cents
+  onboardingFeeSettled      Boolean          @default(false)
+  commissionRateBasisPoints Int              @default(1500) // 15.00% = 1500 bps
+  monthlyFeeMinor           Int              @default(2500000) // PKR 25,000
+  billingCadence            BillingCadence   @default(FOUR_WEEKS)
+
+  // Tax & Fiscal Credentials
+  gstRegistrationNumber     String?          @db.VarChar(40)
+  gstRateBasisPoints        Int              @default(800) // 8.00% standard hospitality
+  ntnNumber                 String?          @db.VarChar(40)
+
+  // HQ Operational Ledger
+  hqLedgerNotes             String?          @db.Text
+
+  // Station & Merchant Identity
+  district                  String?          @db.VarChar(100)
+  address                   String?          @db.VarChar(300)
+  executiveChef             String?          @db.VarChar(100)
+  managerName               String?          @db.VarChar(100)
+  stationId                 String?          @db.VarChar(32)
+  verificationPercent       Int              @default(95)
+  activeDropWindow          String?          @db.VarChar(60)
+
+  // Settlement Route Bank Details
+  bankName                  String?          @db.VarChar(100)
+  bankAccountTitle          String?          @db.VarChar(120)
+  bankAccountNumber         String?          @db.VarChar(64)
+  bankIban                  String?          @db.VarChar(40)
+
+  createdAt                 DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt                 DateTime         @updatedAt @db.Timestamptz(3)
+  deletedAt                 DateTime?        @db.Timestamptz(3)
+
+  branches        Branch[]
+  masterMenuItems MasterMenuItem[]
+  complaints      ComplaintTicket[]
+  payouts         PartnerPayout[]
+  reviews         Review[]
+
+  @@index([status, subscription])
+  @@index([partnerNumber])
+}
+
+model Branch {
+  id                    String       @id @default(uuid(7)) @db.Uuid
+  restaurantId          String       @db.Uuid
+  slug                  String       @db.VarChar(120)
+  name                  String       @db.VarChar(120) // e.g. "Clifton, Block 4"
+  internalCode          String       @unique @db.VarChar(32) // e.g. "FP-CLF-04"
+  locationArea          String       @db.VarChar(100)
+  address               String       @db.VarChar(300)
+  latitude              Decimal      @db.Decimal(9, 6)
+  longitude             Decimal      @db.Decimal(9, 6)
+  geofenceRadiusKm      Decimal      @default(1.0) @db.Decimal(4, 2)
+  phone                 String       @db.VarChar(20)
+  email                 String       @db.Citext
+  status                BranchStatus @default(ACTIVE)
+
+  // Operational Throttles
+  orderIngestionEnabled Boolean      @default(true)
+  isThrottled           Boolean      @default(false)
+  prepBufferMinutes     Int          @default(0)
+  maxOrdersPerHour      Int          @default(50)
+
+  createdAt             DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime     @updatedAt @db.Timestamptz(3)
+  deletedAt             DateTime?    @db.Timestamptz(3)
+
+  restaurant            Restaurant                @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  schedules             BranchOperatingSchedule[]
+  staff                 BranchStaff[]
+  menuOverrides         BranchMenuOverride[]
+  drops                 Drop[]
+  complaints            ComplaintTicket[]
+  reviews               Review[]
+
+  @@unique([restaurantId, slug])
+  @@index([status, locationArea])
+}
+
+model BranchOperatingSchedule {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  branchId  String   @db.Uuid
+  dayOfWeek Int      // 0 = Monday, 6 = Sunday
+  openTime  String   @db.VarChar(8) // "12:00 PM"
+  closeTime String   @db.VarChar(8) // "11:30 PM"
+  isClosed  Boolean  @default(false)
+
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, dayOfWeek])
+}
+
+model BranchStaff {
+  id          String      @id @default(uuid(7)) @db.Uuid
+  branchId    String      @db.Uuid
+  name        String      @db.VarChar(100)
+  email       String      @db.Citext
+  username    String?     @unique @db.VarChar(60)
+  passwordHash String?    @db.VarChar(255)
+  role        StaffRole   @default(KITCHEN_STAFF)
+  status      StaffStatus @default(INVITATION_PENDING)
+  isActive    Boolean     @default(true)
+  pinHash     String?     @db.VarChar(128)
+  lastLoginAt DateTime?   @db.Timestamptz(3)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime    @updatedAt @db.Timestamptz(3)
+
+  branch    Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, email])
+  @@index([email])
+  @@index([username])
+}
+
+model MasterMenuItem {
+  id                 String               @id @default(uuid(7)) @db.Uuid
+  restaurantId       String               @db.Uuid
+  sku                String               @db.VarChar(32) // e.g. "ITM-TFP-001"
+  name               String               @db.VarChar(120)
+  specNarrative      String               @db.VarChar(300)
+  category           String               @db.VarChar(60)
+  basePriceMinor     Int                  // Base price before GST
+  gstRateBasisPoints Int                  @default(800)
+  imageUrl           String?
+  isTemporary        Boolean              @default(false)
+  expiresAt          DateTime?            @db.Timestamptz(3)
+  dietaryTags        String[]             @default([])
+  isActive           Boolean              @default(true)
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime             @updatedAt @db.Timestamptz(3)
+
+  restaurant         Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchOverrides    BranchMenuOverride[]
+
+  @@unique([restaurantId, sku])
+  @@index([restaurantId, category])
+}
+
+model BranchMenuOverride {
+  id               String         @id @default(uuid(7)) @db.Uuid
+  branchId         String         @db.Uuid
+  masterMenuItemId String         @db.Uuid
+  isAvailable      Boolean        @default(true)
+  customPriceMinor Int?
+  updatedAt        DateTime       @updatedAt @db.Timestamptz(3)
+
+  branch           Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  masterItem       MasterMenuItem @relation(fields: [masterMenuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, masterMenuItemId])
+}
+
+model Drop {
+  id                 String     @id @default(uuid(7)) @db.Uuid
+  branchId           String     @db.Uuid
+  sku                String     @unique @db.VarChar(24) // e.g. "#BX-8092"
+  title              String     @db.VarChar(120)
+  categoryTag        String     @db.VarChar(40)
+  headlineItem       String     @db.VarChar(120)
+  description        String?    @db.VarChar(500)
+  imageUrl           String?
+  priceMinor         Int
+  originalPriceMinor Int
+  currency           String     @default("PKR") @db.Char(3)
+  discountTier       String     @db.VarChar(20)
+  totalQuantity      Int
+  remainingQuantity  Int
+  pickupStart        DateTime   @db.Timestamptz(3)
+  pickupEnd          DateTime   @db.Timestamptz(3)
+  pickupSlotDuration String?    @db.VarChar(60)
+  seriesCode         String?    @db.VarChar(32) // e.g. "SERIES 01"
+  rackAllocation     String?    @db.VarChar(60) // e.g. "Rack A1 – A4"
+  scheduledTimeText  String?    @db.VarChar(40) // e.g. "9:00 PM"
+  status             DropStatus @default(DRAFT_REVIEW)
+  publishedAt        DateTime?  @db.Timestamptz(3)
+  postmortemNotes    String?    @db.Text
+  createdAt          DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
+
+  branch             Branch        @relation(fields: [branchId], references: [id])
+  reservations       Reservation[]
+
+  @@index([status, pickupStart])
+  @@index([branchId, status])
+}
+
+model Reservation {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  orderNumber    String      @unique @db.VarChar(24) // e.g. "ORD-9401"
+  userId         String      @db.Uuid
+  dropId         String      @db.Uuid
+  quantity       Int         @default(1)
+  status         OrderStatus @default(PENDING)
+  priceMinor     Int
+  currency       String      @default("PKR") @db.Char(3)
+  referenceCode  String      @unique @db.VarChar(12)
+  idempotencyKey String      @db.Uuid
+  pickupOtp      String?     @db.VarChar(6) // 4-digit guest pickup pass
+  rackLocation   String?     @db.VarChar(40) // Counter rack allocation e.g. "Rack #01"
+  holdExpiresAt  DateTime    @db.Timestamptz(3)
+  confirmedAt    DateTime?   @db.Timestamptz(3)
+  collectedAt    DateTime?   @db.Timestamptz(3)
+  cancelledAt    DateTime?   @db.Timestamptz(3)
+  createdAt      DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime    @updatedAt @db.Timestamptz(3)
+
+  user           User              @relation(fields: [userId], references: [id])
+  drop           Drop              @relation(fields: [dropId], references: [id])
+  complaints     ComplaintTicket[]
+  reviews        Review[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([dropId, status])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model Review {
+  id            String       @id @default(uuid(7)) @db.Uuid
+  restaurantId  String       @db.Uuid
+  branchId      String       @db.Uuid
+  reservationId String?      @db.Uuid
+  customerName  String       @db.VarChar(100)
+  rating        Int          @default(5)
+  boxTitle      String       @db.VarChar(120)
+  comment       String       @db.Text
+  tags          String[]     @default([])
+  reply         String?      @db.Text
+  repliedAt     DateTime?    @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @db.Timestamptz(3)
+
+  restaurant    Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch        Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  reservation   Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, createdAt(sort: Desc)])
+  @@index([branchId])
+}
+
+model ComplaintTicket {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  ticketNumber  String          @unique @db.VarChar(20) // e.g. "#CMP-1049"
+  reservationId String          @db.Uuid
+  restaurantId  String          @db.Uuid
+  branchId      String          @db.Uuid
+  customerName  String          @db.VarChar(100)
+  customerPhone String          @db.VarChar(20)
+  reason        String          @db.VarChar(300)
+  status        ComplaintStatus @default(PENDING_REVIEW)
+  resolution    String?         @db.Text
+  refundMinor   Int?
+  resolvedAt    DateTime?       @db.Timestamptz(3)
+  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
+
+  reservation   Reservation     @relation(fields: [reservationId], references: [id])
+  restaurant    Restaurant      @relation(fields: [restaurantId], references: [id])
+  branch        Branch          @relation(fields: [branchId], references: [id])
+
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model AuditLog {
+  id          String          @id @default(uuid(7)) @db.Uuid
+  adminUserId String?         @db.Uuid
+  actorEmail  String          @db.Citext
+  action      AuditActionType
+  entityType  String          @db.VarChar(40)
+  entityId    String          @db.VarChar(64)
+  summary     String          @db.VarChar(255)
+  payloadJson Json?           @db.JsonB
+  ipAddress   String?         @db.VarChar(45)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(3)
+
+  adminUser   AdminUser?      @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+}
+
+model PartnerPayout {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  payoutReference  String    @unique @db.VarChar(32)
+  restaurantId     String    @db.Uuid
+  periodStart      DateTime  @db.Timestamptz(3)
+  periodEnd        DateTime  @db.Timestamptz(3)
+  grossBoxesSold   Int
+  grossSalesMinor  Int
+  platformFeeMinor Int
+  taxWithheldMinor Int
+  netPayableMinor  Int
+  isSettled        Boolean   @default(false)
+  settledAt        DateTime? @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+
+  restaurant       Restaurant @relation(fields: [restaurantId], references: [id])
+
+  @@index([restaurantId, periodStart])
+}

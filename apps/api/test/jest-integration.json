@@ -1,0 +1,8 @@
+{
+  "rootDir": "..",
+  "testRegex": "test/integration/.*\\.int\\.spec\\.ts$",
+  "transform": { "^.+\\.ts$": "ts-jest" },
+  "testEnvironment": "node",
+  "setupFiles": ["reflect-metadata", "<rootDir>/test/utils/load-env.ts"],
+  "testTimeout": 30000
+}
